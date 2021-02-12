@@ -871,6 +871,52 @@ function eV(vn) {
   return (vn) ? conf_editor.getEditor("root.specificOptions." + vn).getValue() : "";
 }
 
+function assignLightPosHueLightstriptv(id, name, segment) {
+  const segment_name = name + "[" + segment + "]";
+  var pos = { hmin: 0.0, hmax: 1.0, vmin: 0.0, vmax: 1.0, name: segment_name};
+
+  switch (segment) {
+    case 0:
+      // left lower half
+      pos.hmax = 0.15;
+      pos.vmin = 0.5;
+      break;
+    case 1:
+      // left upper half
+      pos.hmax = 0.15;
+      pos.vmax = 0.5;
+      break;
+    case 2:
+      // top left third
+      pos.hmax = 0.33;
+      pos.vmax = 0.15;
+      break;
+    case 3:
+      // top middle third
+      pos.hmin = 0.33;
+      pos.hmax = 0.67;
+      pos.vmax = 0.15;
+      break;
+    case 4:
+      // top right third
+      pos.hmin = 0.67;
+      pos.vmax = 0.15;
+      break;
+    case 5:
+      // right upper half
+      pos.hmin = 0.85;
+      pos.vmax = 0.5;
+      break;
+    case 6:
+      // right lower half
+      pos.hmin = 0.85;
+      pos.vmin = 0.5;
+      break;
+  }
+
+  return pos;
+}
+
 function beginWizardHue() {
   var usr = eV("username");
   if (usr != "") {
@@ -926,6 +972,7 @@ function beginWizardHue() {
   $('#btn_wiz_save').off().on("click", function () {
     var hueLedConfig = [];
     var finalLightIds = [];
+    var segments = 0;
 
     //create hue led config
     for (var key in lightIDs) {
@@ -934,8 +981,16 @@ function beginWizardHue() {
       }
       if ($('#hue_' + key).val() != "disabled") {
         finalLightIds.push(key);
-        var idx_content = assignLightPos(key, $('#hue_' + key).val(), lightIDs[key].name);
-        hueLedConfig.push(JSON.parse(JSON.stringify(idx_content)));
+        if (is_hue_lightstriptv(lightIDs[key].modelid)) {
+          segments = 7;
+          for (segment = 0; segment < segments; segment++) {
+            var idx_content = assignLightPosHueLightstriptv(key, lightIDs[key].name, segment);
+            hueLedConfig.push(JSON.parse(JSON.stringify(idx_content)));
+          }
+        } else {
+          var idx_content = assignLightPos(key, $('#hue_' + key).val(), lightIDs[key].name);
+          hueLedConfig.push(JSON.parse(JSON.stringify(idx_content)));
+        }
       }
     }
 
@@ -990,6 +1045,8 @@ function beginWizardHue() {
     if (hueType == 'philipshueentertainment') {
       d.useEntertainmentAPI = true;
       d.hardwareLedCount = groupLights.length;
+      if (segments)
+        d.hardwareLedCount += segments - 1;
       d.rewriteTime = 20;
       //smoothing on
       sc.smoothing.enable = true;
@@ -1119,6 +1176,13 @@ function get_light_state(id) {
   });
 }
 
+function is_hue_lightstriptv(modelid) {
+  if (modelid == 'LCX001')
+    return true;
+
+  return false;
+}
+
 function get_hue_lights() {
   $.ajax({
     type: "GET",
@@ -1150,23 +1214,27 @@ function get_hue_lights() {
           if (hueType == 'philipshueentertainment') {
             if (groupLights.indexOf(lightid) == -1) continue;
 
-            if (groupLightsLocations.hasOwnProperty(lightid)) {
-              lightLocation = groupLightsLocations[lightid];
-              var x = lightLocation[0];
-              var y = lightLocation[1];
-              var z = lightLocation[2];
-              var xval = (x < 0) ? "left" : "right";
-              if (z != 1 && x >= -0.25 && x <= 0.25) xval = "";
-              switch (z) {
-                case 1: // top / Ceiling height
-                  pos = "top" + xval;
-                  break;
-                case 0: // middle / TV height
-                  pos = (xval == "" && y >= 0.75) ? "bottom" : xval + "middle";
-                  break;
-                case -1: // bottom / Ground height
-                  pos = xval + "bottom";
-                  break;
+            if (is_hue_lightstriptv(r[lightid].modelid)) {
+              pos = "entire";
+            } else {
+              if (groupLightsLocations.hasOwnProperty(lightid)) {
+                lightLocation = groupLightsLocations[lightid];
+                var x = lightLocation[0];
+                var y = lightLocation[1];
+                var z = lightLocation[2];
+                var xval = (x < 0) ? "left" : "right";
+                if (z != 1 && x >= -0.25 && x <= 0.25) xval = "";
+                switch (z) {
+                  case 1: // top / Ceiling height
+                    pos = "top" + xval;
+                    break;
+                  case 0: // middle / TV height
+                    pos = (xval == "" && y >= 0.75) ? "bottom" : xval + "middle";
+                    break;
+                  case -1: // bottom / Ground height
+                    pos = xval + "bottom";
+                    break;
+                }
               }
             }
           }

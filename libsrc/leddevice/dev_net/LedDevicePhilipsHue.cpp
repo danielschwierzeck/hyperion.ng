@@ -660,6 +660,7 @@ PhilipsHueLight::PhilipsHueLight(Logger* log, unsigned int id, QJsonObject value
 	  , _ledidx(ledidx)
 	  , _on(false)
 	  , _transitionTime(0)
+	  , _segments(0)
 	  , _colorBlack({0.0, 0.0, 0.0})
 	  , _modelId(values[API_MODEID].toString().trimmed().replace("\"", ""))
 {
@@ -695,6 +696,13 @@ PhilipsHueLight::PhilipsHueLight(Logger* log, unsigned int id, QJsonObject value
 		_colorSpace.green 	= {0.0, 1.0};
 		_colorSpace.blue 	= {0.0, 0.0};
 		_colorBlack 		= {0.0, 0.0, 0.0};
+	}
+
+	// Hue Play Gradient Lightstrip has 7 segments.
+	if (_modelId == "LCX001")
+	{
+		_segments = 7;
+		_colorSegments.resize(_segments);
 	}
 
 	_lightname = values["name"].toString().trimmed().replace("\"", "");
@@ -764,6 +772,14 @@ void PhilipsHueLight::setColor(const CiColor& color)
 	this->_color = color;
 }
 
+void PhilipsHueLight::setSegmentColor(const CiColor& color, int segment)
+{
+	if (_segments && segment < _segments)
+	{
+		this->_colorSegments[segment] = color;
+	}
+}
+
 bool PhilipsHueLight::getOnOffState() const
 {
 	return _on;
@@ -774,9 +790,26 @@ int PhilipsHueLight::getTransitionTime() const
 	return _transitionTime;
 }
 
+int PhilipsHueLight::getSegments() const
+{
+	return _segments;
+}
+
 CiColor PhilipsHueLight::getColor() const
 {
 	return _color;
+}
+
+CiColor PhilipsHueLight::getSegmentColor(int segment) const
+{
+	if (_segments && segment < _segments)
+	{
+		return _colorSegments[segment];
+	}
+	else
+	{
+		return _color;
+	}
 }
 
 CiColorTriangle PhilipsHueLight::getColorSpace() const
@@ -1230,23 +1263,53 @@ bool LedDevicePhilipsHue::setStreamGroupState(bool state)
 QByteArray LedDevicePhilipsHue::prepareStreamData() const
 {
 	QByteArray msg;
-	msg.reserve(static_cast<int>(sizeof(HEADER) + sizeof(PAYLOAD_PER_LIGHT) * _lights.size()));
+
+	unsigned int lightCount = 0;
+	for (const PhilipsHueLight& light : _lights)
+	{
+		if (light.getSegments())
+			lightCount += light.getSegments();
+		else
+			lightCount++;
+	}
+
+	msg.reserve(static_cast<int>(sizeof(HEADER) + sizeof(PAYLOAD_PER_LIGHT) * lightCount));
 	msg.append(reinterpret_cast<const char*>(HEADER), sizeof(HEADER));
 
 	for (const PhilipsHueLight& light : _lights)
 	{
-		CiColor lightC = light.getColor();
-		quint64 R = lightC.x * 0xffff;
-		quint64 G = lightC.y * 0xffff;
-		quint64 B = (lightC.x || lightC.y) ? lightC.bri * 0xffff : 0;
-		unsigned int id = light.getId();
-		const uint8_t payload[] = {
-			0x00, 0x00, static_cast<uint8_t>(id),
-			static_cast<uint8_t>((R >> 8) & 0xff), static_cast<uint8_t>(R & 0xff),
-			static_cast<uint8_t>((G >> 8) & 0xff), static_cast<uint8_t>(G & 0xff),
-			static_cast<uint8_t>((B >> 8) & 0xff), static_cast<uint8_t>(B & 0xff)
-		};
-		msg.append(reinterpret_cast<const char *>(payload), sizeof(payload));
+		if (light.getSegments())
+		{
+			for (int segment = 0; segment < light.getSegments(); segment++)
+			{
+				CiColor lightC = light.getSegmentColor(segment);
+				quint64 R = lightC.x * 0xffff;
+				quint64 G = lightC.y * 0xffff;
+				quint64 B = (lightC.x || lightC.y) ? lightC.bri * 0xffff : 0;
+				const uint8_t payload[] = {
+					0x01, 0x00, static_cast<uint8_t>(segment),
+					static_cast<uint8_t>((R >> 8) & 0xff), static_cast<uint8_t>(R & 0xff),
+					static_cast<uint8_t>((G >> 8) & 0xff), static_cast<uint8_t>(G & 0xff),
+					static_cast<uint8_t>((B >> 8) & 0xff), static_cast<uint8_t>(B & 0xff)
+				};
+				msg.append(reinterpret_cast<const char *>(payload), sizeof(payload));
+			}
+		}
+		else
+		{
+			CiColor lightC = light.getColor();
+			quint64 R = lightC.x * 0xffff;
+			quint64 G = lightC.y * 0xffff;
+			quint64 B = (lightC.x || lightC.y) ? lightC.bri * 0xffff : 0;
+			unsigned int id = light.getId();
+			const uint8_t payload[] = {
+				0x00, 0x00, static_cast<uint8_t>(id),
+				static_cast<uint8_t>((R >> 8) & 0xff), static_cast<uint8_t>(R & 0xff),
+				static_cast<uint8_t>((G >> 8) & 0xff), static_cast<uint8_t>(G & 0xff),
+				static_cast<uint8_t>((B >> 8) & 0xff), static_cast<uint8_t>(B & 0xff)
+			};
+			msg.append(reinterpret_cast<const char *>(payload), sizeof(payload));
+		}
 	}
 
 	return msg;
@@ -1400,31 +1463,52 @@ int LedDevicePhilipsHue::writeSingleLights(const std::vector<ColorRgb>& ledValue
 	// Iterate through lights and set colors.
 	unsigned int idx = 0;
 	unsigned int blackCounter = 0;
+	unsigned int lightsCount = _lightsCount;
 	for ( PhilipsHueLight& light : _lights )
 	{
-		// Get color.
-		ColorRgb color = ledValues.at(idx);
-		// Scale colors from [0, 255] to [0, 1] and convert to xy space.
-		CiColor xy = CiColor::rgbToCiColor(color.red / 255.0, color.green / 255.0, color.blue / 255.0, light.getColorSpace());
-
-		if( _useHueEntertainmentAPI )
+		if ( light.getSegments() && _useHueEntertainmentAPI )
 		{
-			this->setColor(light, xy);
-			if( xy.bri >= 0.0 && xy.bri <= _brightnessThreshold )
+			lightsCount += light.getSegments() - 1;
+			for ( int segment = 0; segment < light.getSegments(); segment++ )
 			{
-				blackCounter++;
+				// Get color.
+				ColorRgb color = ledValues.at(idx + segment);
+				// Scale colors from [0, 255] to [0, 1] and convert to xy space.
+				CiColor xy = CiColor::rgbToCiColor(color.red / 255.0, color.green / 255.0, color.blue / 255.0, light.getColorSpace());
+
+				setSegmentColor(light, xy, segment);
+				if (xy.bri >= 0.0 && xy.bri <= _brightnessThreshold)
+				{
+					blackCounter++;
+				}
 			}
 		}
 		else
 		{
-			if ( _switchOffOnBlack && xy.bri == 0.0 )
+			// Get color.
+			ColorRgb color = ledValues.at(idx);
+			// Scale colors from [0, 255] to [0, 1] and convert to xy space.
+			CiColor xy = CiColor::rgbToCiColor(color.red / 255.0, color.green / 255.0, color.blue / 255.0, light.getColorSpace());
+
+			if (_useHueEntertainmentAPI)
 			{
-				this->setOnOffState( light, false );
+				this->setColor(light, xy);
+				if (xy.bri >= 0.0 && xy.bri <= _brightnessThreshold)
+				{
+					blackCounter++;
+				}
 			}
 			else
 			{
-				// Write color if color has been changed.
-				this->setState( light, true, xy );
+				if (_switchOffOnBlack && xy.bri == 0.0)
+				{
+					this->setOnOffState(light, false);
+				}
+				else
+				{
+					// Write color if color has been changed.
+					this->setState(light, true, xy);
+				}
 			}
 		}
 		idx++;
@@ -1432,7 +1516,7 @@ int LedDevicePhilipsHue::writeSingleLights(const std::vector<ColorRgb>& ledValue
 
 	if( _useHueEntertainmentAPI )
 	{
-		_allLightsBlack = ( blackCounter == _lightsCount );
+		_allLightsBlack = ( blackCounter == lightsCount );
 	}
 
 	return 0;
@@ -1479,6 +1563,15 @@ void LedDevicePhilipsHue::setColor(PhilipsHueLight& light, CiColor& color)
 			//if(color.x == 0.0 && color.y == 0.0) color = colorBlack;
 		}
 		light.setColor( color );
+	}
+}
+
+void LedDevicePhilipsHue::setSegmentColor(PhilipsHueLight& light, CiColor& color, int segment)
+{
+	if ( light.getSegmentColor(segment) != color)
+	{
+		color.bri = ( qMin( _brightnessMax, _brightnessFactor * qMax( _brightnessMin, color.bri ) ) );
+		light.setSegmentColor(color, segment);
 	}
 }
 

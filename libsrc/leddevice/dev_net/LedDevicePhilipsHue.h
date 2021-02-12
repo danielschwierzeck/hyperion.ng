@@ -166,12 +166,15 @@ public:
 	/// @param color the color to set
 	///
 	void setColor(const CiColor& color);
+	void setSegmentColor(const CiColor& color, int segment);
 
 	unsigned int getId() const;
 
 	bool getOnOffState() const;
 	int getTransitionTime() const;
+	int getSegments() const;
 	CiColor getColor() const;
+	CiColor getSegmentColor(int segment) const;
 
 	///
 	/// @return the color space of the light determined by the model id reported by the bridge.
@@ -188,7 +191,10 @@ private:
 	unsigned int _ledidx;
 	bool _on;
 	int _transitionTime;
+	int _segments;
 	CiColor _color;
+	using CiColorSegments = std::vector<CiColor>;
+	CiColorSegments _colorSegments;
 	/// darkes blue color in hue lamp GAMUT = black
 	CiColor _colorBlack;
 	/// The model id of the hue lamp which is used to determine the color space.
@@ -406,6 +412,7 @@ public:
 	void setOnOffState(PhilipsHueLight& light, bool on);
 	void setTransitionTime(PhilipsHueLight& light);
 	void setColor(PhilipsHueLight& light, CiColor& color);
+	void setSegmentColor(PhilipsHueLight& light, CiColor& color, int segment);
 	void setState(PhilipsHueLight& light, bool on, const CiColor& color);
 
 public slots:
